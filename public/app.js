@@ -243,8 +243,24 @@ function tryResume() {
 
 /* ───────────── 상태 렌더 ───────────── */
 let wasResolving = false;
+/* 판 수 세기 — 방장 화면에서만. 사람마다 보내면 한 판이 인원수만큼 세어진다. */
+let gameAt = 0;
+function countGame(s, prev) {
+  const my = s.you != null ? s.you : me;
+  if (!window.norara || !s.players || s.hostId !== my) return;
+  const humans = s.players.filter(p => !p.bot).length;
+  if (s.phase === 'playing' && (!prev || prev.phase !== 'playing')) {
+    gameAt = Date.now();
+    norara.ev('start', { n: humans });
+  } else if (s.phase === 'over' && (!prev || prev.phase !== 'over') && gameAt) {
+    norara.ev('end', { n: humans, sec: Math.round((Date.now() - gameAt) / 1000) });
+    gameAt = 0;
+  }
+}
+
 function onState(s) {
   const prev = S;
+  countGame(s, prev);
   S = s;
   syncChatVisible();          // 대기실에서도 채팅이 되어야 한다
   // 정지 구간이 끝나는 순간 입력창을 비운다.
