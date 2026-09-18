@@ -73,7 +73,7 @@ const el = {};
  'roomCode','btnCopy','lobbyPlayers','hostBox','optDiff','optLimit',
  'btnAddBot','btnStart','lobbyHint','barCode','btnLeave',
  'entry','btnFlip','flipTimer','status','log','overlay','ovTitle','ovSub','btnAgain',
- 'btnToLobby','toast','verdict','ovRank','theme','themeGame','board','slots','bell','btnSound','bigToggle','btnGo','waitMsg','turnNow','startGate','optMode','modePick','btnHelp','btnHelpClose','help','helpTitle','helpBody','optSpace','intro','setup','btnEnter','btnBack','themeIntro','confetti'].forEach(k => el[k] = $(k));
+ 'btnToLobby','toast','verdict','ovRank','theme','themeGame','board','slots','bell','btnSound','bigToggle','btnGo','waitMsg','turnNow','startGate','optMode','modePick','btnHelp','btnHelpClose','help','helpTitle','helpBody','optSpace','optPriv','inPriv','roomList','roomEmpty','roomCount','intro','setup','btnEnter','btnBack','themeIntro','confetti'].forEach(k => el[k] = $(k));
 
 let ws = null, me = null, S = null, clockOffset = 0;
 let flashInfo = null, flashUntil = 0, verdictTimer = null;
@@ -110,6 +110,7 @@ function show(which) {
   el.scLogin.hidden = which !== 'login';
   el.scLobby.hidden = which !== 'lobby';
   el.scGame.hidden  = which !== 'game';
+  if (which !== 'login' && watching) watchRooms(false);
   // 방을 벗어나면 채팅도 접는다
   if (which !== 'game' && which !== 'lobby') {
     const c = document.getElementById('chat');
@@ -158,6 +159,7 @@ function wake(e) {
   resting = false;
   el.toast.hidden = true;
   if (sessionStorage.getItem('hg')) { wokeUp = true; tryResume(); }
+  else if (watching) watchRooms(true);      // 방 고르기 화면에서 쉬었다 — 목록을 다시 받는다
 }
 ['pointerdown', 'keydown'].forEach(t => addEventListener(t, wake, true));
 document.addEventListener('visibilitychange', wake);
@@ -192,6 +194,8 @@ function connect(onOpen) {
       location.hash = m.code;
     } else if (m.t === 'state') {
       onState(m);
+    } else if (m.t === 'rooms') {
+      if (watching) renderRooms(m.list);
     } else if (m.t === 'chat') {
       addChat(m.name, m.text, m.from === me);
     } else if (m.t === 'ev') {
@@ -227,7 +231,11 @@ function connect(onOpen) {
       clearTimeout(toastTimer);                // 누를 때까지 떠 있게
       return;
     }
-    if (!el.scLogin.hidden) return;
+    if (!el.scLogin.hidden) {
+      // 방 고르기 화면에서 끊겼다 — 조용히 다시 붙어 목록을 이어 받는다
+      if (watching) setTimeout(() => { if (watching && (!ws || ws.readyState > 1)) watchRooms(true); }, 3000);
+      return;
+    }
     toast('연결이 끊겼어요. 다시 접속하는 중…');
     setTimeout(tryResume, 1200);
   };
@@ -302,6 +310,7 @@ function renderLobby() {
   el.hostBox.hidden = !isHost();
   el.optMode.value = S.cfg.mode || 'basic';
   el.optSpace.checked = !!S.cfg.spaceBell;
+  el.optPriv.checked = !!S.cfg.priv;
   el.optDiff.value = S.cfg.botDiff;
   el.optLimit.value = String(S.cfg.turnLimit);
   el.btnStart.disabled = S.players.length < 2;
@@ -800,6 +809,7 @@ paintMode();
 function showSetup(on) {
   el.intro.hidden = on;
   el.setup.hidden = !on;
+  if (on !== watching) watchRooms(on);
   if (on) setTimeout(() => el.inName.focus(), 30);
 }
 // 시작 화면 배경에 과일이 천천히 흩날린다
@@ -824,7 +834,7 @@ el.btnBack.addEventListener('click', () => showSetup(false));
 
 el.btnCreate.addEventListener('click', () => {
   localStorage.setItem('hgName', nameOf());
-  connect(() => send({ t: 'create', name: nameOf(), mode: createMode }));
+  connect(() => send({ t: 'create', name: nameOf(), mode: createMode, priv: el.inPriv.checked }));
 });
 el.btnJoin.addEventListener('click', () => {
   const code = el.inCode.value.trim().toUpperCase();
@@ -833,6 +843,51 @@ el.btnJoin.addEventListener('click', () => {
   connect(() => send({ t: 'join', code, name: nameOf() }));
 });
 el.inCode.addEventListener('keydown', e => { if (e.key === 'Enter') el.btnJoin.click(); });
+
+/* ───────────── 열린 방 ─────────────
+   방 고르기 화면을 보는 동안만 서버에 목록을 받는다. 방에 들어가면 서버가 알아서 끊어 준다.
+   탭을 뒤로 보내면 소켓을 놓는다 — 켜 두기만 한 첫 화면이 서버(무료 한도)를 붙잡지 않게. */
+let watching = false;
+function watchRooms(on) {
+  watching = on;
+  if (on) connect(() => { if (watching && !sessionStorage.getItem('hg')) send({ t: 'rooms' }); });
+  else send({ t: 'unwatch' });
+}
+document.addEventListener('visibilitychange', () => {
+  if (!watching || resting || sessionStorage.getItem('hg')) return;
+  if (document.hidden) {
+    if (!ws) return;
+    const s = ws; ws = null;
+    s.onopen = s.onmessage = s.onclose = null;
+    clearInterval(pingT);
+    try { s.close(); } catch (_) {}
+  } else watchRooms(true);
+});
+
+const ROOM_STATE = { wait: '기다리는 중', full: '가득 참', playing: '게임 중' };
+const ROOM_MODE = { basic: '기본', extreme: '익스트림' };
+function renderRooms(list) {
+  const open = list.filter(r => r.state === 'wait').length;
+  el.roomCount.textContent = list.length ? `${open}곳` : '';
+  el.roomEmpty.hidden = list.length > 0;
+  el.roomList.innerHTML = list.map(r => {
+    const off = r.state !== 'wait';
+    return `<li><button class="roomrow${off ? ' off' : ''}" data-code="${chatEsc(r.code)}"${off ? ' disabled' : ''}>
+      <span class="rr-code">${chatEsc(r.code)}</span>
+      <span class="rr-host">${chatEsc(r.host || '이름 없음')}의 방</span>
+      <span class="rr-mode">${ROOM_MODE[r.mode] || ''}</span>
+      <span class="rr-n">${r.n}/${r.max}</span>
+      <span class="rr-st ${chatEsc(r.state)}">${ROOM_STATE[r.state] || ''}</span>
+    </button></li>`;
+  }).join('');
+}
+// 줄을 누르면 코드를 넣고 참가를 누른 것과 똑같이 — 이름도 기존 참가 흐름을 그대로 탄다
+el.roomList.addEventListener('click', e => {
+  const b = e.target.closest('.roomrow');
+  if (!b || b.disabled) return;
+  el.inCode.value = b.dataset.code;
+  el.btnJoin.click();
+});
 el.inName.addEventListener('keydown', e => { if (e.key === 'Enter') el.btnCreate.click(); });
 
 el.btnCopy.addEventListener('click', async () => {
@@ -844,6 +899,7 @@ el.btnAddBot.addEventListener('click', () => send({ t: 'addBot' }));
 el.btnStart.addEventListener('click', () => send({ t: 'start' }));
 el.optMode.addEventListener('change', () => send({ t: 'cfg', mode: el.optMode.value }));
 el.optSpace.addEventListener('change', () => send({ t: 'cfg', spaceBell: el.optSpace.checked }));
+el.optPriv.addEventListener('change', () => send({ t: 'cfg', priv: el.optPriv.checked }));
 el.optDiff.addEventListener('change', () => send({ t: 'cfg', botDiff: el.optDiff.value }));
 el.optLimit.addEventListener('change', () => send({ t: 'cfg', turnLimit: +el.optLimit.value }));
 el.btnAgain.addEventListener('click', () => send({ t: 'again' }));

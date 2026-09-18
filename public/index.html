@@ -56,6 +56,10 @@
     </div>
 
     <button class="btn primary big" id="btnCreate">방 만들기</button>
+    <label class="privpick">
+      <input type="checkbox" id="inPriv">
+      <span>비공개 방으로 <small>열린 방 목록에 안 뜨고, 코드로만 들어와요</small></span>
+    </label>
 
     <div class="or"><span>또는</span></div>
 
@@ -63,6 +67,13 @@
       <input id="inCode" maxlength="4" placeholder="방 코드" autocomplete="off"
              autocapitalize="characters" spellcheck="false">
       <button class="btn" id="btnJoin">참가</button>
+    </div>
+
+    <!-- 열린 방 — 코드를 몰라도 사람을 기다리는 방에 들어갈 수 있게. 이 화면을 보는 동안만 받는다. -->
+    <div class="openrooms">
+      <div class="orhead">열린 방 <span id="roomCount"></span></div>
+      <ul class="roomlist" id="roomList"></ul>
+      <p class="roomempty" id="roomEmpty">지금 열린 방이 없어요 — 방을 만들어 보세요</p>
     </div>
 
     <div class="themerow"><span>테마</span><select id="theme"><option value="felt">딥 그린 펠트</option><option value="neon">네온 아케이드</option><option value="paper">크래프트 페이퍼</option><option value="midnight">미드나잇 미니멀</option><option value="candy">캔디 팝</option></select></div>
@@ -102,6 +113,10 @@
             <option value="normal" selected>보통</option>
             <option value="hard">어려움</option>
           </select>
+        </label>
+        <label class="opt check">
+          <input type="checkbox" id="optPriv">
+          <span>비공개 방 <small>(목록에 안 뜸)</small></span>
         </label>
         <label class="opt check">
           <input type="checkbox" id="optSpace">

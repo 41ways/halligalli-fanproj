@@ -178,7 +178,7 @@ const clean = (s, max) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim()
 
 /* ─────────────────────────── 방 ─────────────────────────── */
 
-function createRoom() {
+function createRoom({ priv = false } = {}) {
   const room = {
     code: makeCode(),
     phase: 'lobby',              // lobby | ready | playing | over
@@ -192,9 +192,11 @@ function createRoom() {
     fiveSince: 0,
     winner: null,
     lock: {},
-    cfg: { botDiff: 'normal', turnLimit: 6000, mode: 'basic', spaceBell: false },
+    // priv — 열린 방 목록에 안 띄운다(코드로는 들어온다)
+    cfg: { botDiff: 'normal', turnLimit: 6000, mode: 'basic', spaceBell: false, priv: !!priv },
     timers: { turn: null, resume: null, nudge: null, bots: [], host: null },
     lastActive: Date.now(),
+    madeAt: Date.now(),
   };
   rooms.set(room.code, room);
   return room;
@@ -222,6 +224,7 @@ function removePlayer(room, id) {
   const hadTop = room.phase === 'playing' && room.players[i].table.length > 0;
   const [gone] = room.players.splice(i, 1);
   clearTimeout(gone.leaveT);
+  listChanged();
   if (room.hostId === gone.id) {
     const next = room.players.find(p => !p.bot && p.connected) || room.players.find(p => !p.bot);
     room.hostId = next ? next.id : null;
@@ -355,6 +358,43 @@ function broadcast(room, obj) {
 const pushState = room => broadcast(room, stateOf(room));
 const ev = (room, obj) => broadcast(room, Object.assign({ t: 'ev' }, obj));
 
+/* ─────────────────────────── 열린 방 목록 ───────────────────────────
+   코드를 몰라도 들어올 수 있게, 방 고르기 화면을 보는 소켓(watchers)에 목록을 밀어 준다.
+   방에 앉으면(attach) 명단에서 빠진다. 여러 번 바뀌어도 300ms 에 한 번만 보낸다. */
+
+const watchers = new Set();
+let listT = null;
+
+function listChanged() {
+  if (listT || !watchers.size) return;
+  listT = setTimeout(() => { listT = null; pushList(); }, 300);
+}
+
+/** 비공개 방과 사람이 아무도 붙어 있지 않은 방은 뺀다. 들어갈 수 있는 방(wait)이 먼저, 그 안에서는 새 방이 먼저. */
+function roomList() {
+  const rs = [];
+  for (const r of rooms.values()) {
+    if (r.cfg.priv || !r.players.some(p => !p.bot && p.connected)) continue;
+    const state = r.phase !== 'lobby' ? 'playing' : r.players.length >= MAX_PLAYERS ? 'full' : 'wait';
+    rs.push({ r, state });
+  }
+  rs.sort((a, b) => (a.state === 'wait' ? 0 : 1) - (b.state === 'wait' ? 0 : 1) || b.r.madeAt - a.r.madeAt);
+  const list = rs.slice(0, 20).map(({ r, state }) => {
+    const host = r.players.find(p => p.id === r.hostId);
+    return { code: r.code, host: host ? host.name : '', n: r.players.length, max: MAX_PLAYERS, mode: r.cfg.mode, state };
+  });
+  return { t: 'rooms', list };
+}
+
+function pushList() {
+  if (!watchers.size) return;
+  const text = JSON.stringify(roomList());
+  for (const ws of watchers) {
+    if (ws.readyState !== 1) { watchers.delete(ws); continue; }
+    try { ws.send(text); } catch (_) { watchers.delete(ws); }
+  }
+}
+
 /* ─────────────────────────── 타이머 ─────────────────────────── */
 
 function clearBotTimers(room) {
@@ -393,6 +433,7 @@ function startGame(room) {
 
   ev(room, { kind: 'dealt' });
   pushState(room);
+  listChanged();                  // 시작한 방은 목록에서 '게임 중' 으로
 }
 
 /** 방장이 테이블에서 시작을 누르면 그때 첫 차례가 열린다 */
@@ -659,6 +700,7 @@ function endGame(room, winner) {
 
 function attach(room, p, ws) {
   clearTimeout(p.leaveT);
+  watchers.delete(ws);           // 방에 들어왔으니 목록은 그만 받는다
   const wasGone = !p.connected;
   p.ws = ws; p.connected = true;
   // 방장이 자리를 비운 채면(모두 끊겼다 이 사람이 먼저 돌아온 경우 등) 돌아온 사람이 방장을 맡는다
@@ -675,6 +717,7 @@ function attach(room, p, ws) {
   ws.roomCode = room.code; ws.playerId = p.id;
   send(ws, { t: 'welcome', you: p.id, token: p.token, code: room.code });
   pushState(room);
+  listChanged();
 }
 
 /** 이 소켓이 이미 어느 자리에 앉아 있으면 거기서 떼어 낸다. create/join/resume 을 연달아 받으면
@@ -699,8 +742,16 @@ function handle(ws, msg) {
   const room = rooms.get(ws.roomCode);
 
   switch (msg.t) {
+    // 열린 방 목록 구독 — 방 고르기 화면을 보는 동안만. 방에 앉아 있으면 받지 않는다.
+    case 'rooms':
+      if (!ws.roomCode) { watchers.add(ws); send(ws, roomList()); }
+      return;
+    case 'unwatch':
+      watchers.delete(ws);
+      return;
+
     case 'create': {
-      const r = createRoom();
+      const r = createRoom({ priv: msg.priv === true });
       if (MODE_KEYS.includes(msg.mode)) r.cfg.mode = msg.mode;
       const p = addPlayer(r, { name: clean(msg.name, 12) || '플레이어 1' });
       attach(r, p, ws);
@@ -743,6 +794,7 @@ function handle(ws, msg) {
     case 'name':
       me.name = clean(msg.name, 12) || me.name;
       pushState(room);
+      if (isHost) listChanged();
       break;
 
     case 'addBot': {
@@ -752,6 +804,7 @@ function handle(ws, msg) {
       const name = BOT_NAMES.find(n => !used.has(n)) || `봇 ${room.players.length + 1}`;
       addPlayer(room, { name, bot: true });
       pushState(room);
+      listChanged();
       break;
     }
 
@@ -778,7 +831,9 @@ function handle(ws, msg) {
       if ([0, 4000, 6000, 9000].includes(msg.turnLimit)) room.cfg.turnLimit = msg.turnLimit;
       if (MODE_KEYS.includes(msg.mode) && room.phase === 'lobby') room.cfg.mode = msg.mode;
       if (typeof msg.spaceBell === 'boolean') room.cfg.spaceBell = msg.spaceBell;
+      if (typeof msg.priv === 'boolean' && msg.priv !== room.cfg.priv) room.cfg.priv = msg.priv;
       pushState(room);
+      listChanged();                // 모드·비공개가 목록에 보인다
       break;
     }
 
@@ -850,11 +905,13 @@ function armLeave(room, p) {
  *  keepSeat — 서버가 스스로 끊은 경우(오래 조작 없음 · 소식 없음). 사람은 나간 게 아니라서
  *  대기실 자리를 지워 버리면 "누르면 다시 붙어요" 가 거짓말이 된다. 자리는 두고 방장만 넘긴다. */
 function disconnect(ws, { keepSeat = false } = {}) {
+  watchers.delete(ws);
   const room = rooms.get(ws.roomCode);
   if (!room) return;
   const p = room.players.find(x => x.id === ws.playerId);
   if (!p || p.ws !== ws) return;
   p.connected = false; p.ws = null;
+  listChanged();                             // 사람이 모두 끊긴 방은 목록에서 빠진다
   room.lastActive = Date.now();              // 빈 방 청소는 마지막 사람이 떠난 때부터 센다
 
   // 방장이 끊기면 잠깐 기다렸다가 붙어 있는 사람에게 넘긴다 — 판 중이든 끝난 뒤든.
@@ -892,6 +949,7 @@ function toLobby(room) {
   for (const p of room.players) { p.hand = []; p.table = []; p.out = false; }
   for (const p of room.players) if (!p.bot && !p.connected) armLeave(room, p);
   pushState(room);
+  listChanged();                  // 다시 대기실 — 목록에서 다시 들어갈 수 있게
 }
 
 /** 사람이 다 떠난 방을 치운다. 통신 쪽이 30초마다 부른다.
