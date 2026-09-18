@@ -247,6 +247,8 @@ let wasResolving = false;
 let gameAt = 0;
 function countGame(s, prev) {
   const my = s.you != null ? s.you : me;
+  // 지금 판 중인지 — 참가자도 알린다(판 수는 방장만 세지만, "지금 누가 있나"는 사람마다 센다)
+  if (window.norara && norara.live) norara.live(s.phase === 'playing' || s.phase === 'ready');
   if (!window.norara || !s.players || s.hostId !== my) return;
   const humans = s.players.filter(p => !p.bot).length;
   if (s.phase === 'playing' && (!prev || prev.phase !== 'playing')) {
