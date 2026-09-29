@@ -151,11 +151,11 @@ function log(html, cls) {
 /* 서버(Cloudflare 무료 플랜)는 켜져 있는 시간이 한도라서,
    20분 동안 아무 조작이 없으면 서버가 연결을 닫는다(4000). 그때는 스스로 다시 붙지 않고
    화면을 다시 만질 때 이어 붙는다. 켜 두기만 한 탭이 서버를 붙잡아 두지 않게. */
-let pingT = null, resting = false, wokeUp = false;
+let pingT = null, resting = false, wokeUp = false, restWhy = 0;
 
 function wake(e) {
   if (!resting) return;
-  if (e.type === 'visibilitychange' && document.hidden) return;   // 탭을 떠날 때는 아님
+  if (e.type === 'visibilitychange' && (document.hidden || restWhy === 4001)) return;   // 넘겨준 자리는 눌러서만 되찾는다
   resting = false;
   el.toast.hidden = true;
   if (sessionStorage.getItem('hg')) { wokeUp = true; tryResume(); }
@@ -223,7 +223,7 @@ function connect(onOpen) {
     // 4000: 오래 조작이 없어 서버가 닫음 · 4001: 다른 탭이 이 자리를 이어받음(탭 복제 등)
     // 둘 다 스스로 다시 붙지 않는다 — 붙으면 서로를 밀어내며 끝없이 오간다. 누를 때 다시 붙는다.
     if (e.code === 4000 || e.code === 4001) {
-      resting = true;
+      resting = true; restWhy = e.code;
       el.toast.textContent = e.code === 4000
         ? '한동안 조작이 없어서 연결을 쉬고 있어요. 아무 곳이나 누르면 다시 붙어요.'
         : '다른 창에서 이 자리를 이어받았어요. 여기서 계속하려면 아무 곳이나 누르세요.';
