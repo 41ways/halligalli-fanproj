@@ -58,7 +58,11 @@
     <button class="btn primary big" id="btnCreate">방 만들기</button>
     <label class="privpick">
       <input type="checkbox" id="inPriv">
-      <span>비공개 방으로 <small>열린 방 목록에 안 뜨고, 코드로만 들어와요</small></span>
+      <span>비공개 방으로 <small>목록에는 '비공개'로만 보이고, 코드로만 들어와요</small></span>
+    </label>
+    <label class="privpick">
+      <input type="checkbox" id="inSpec" checked>
+      <span>관전 허용 <small>시작했거나 가득 찬 방에도 구경하러 들어올 수 있어요</small></span>
     </label>
 
     <div class="or"><span>또는</span></div>
@@ -96,6 +100,7 @@
     </div>
 
     <div class="seatlist" id="lobbyPlayers"></div>
+    <p class="specline" id="specLine" hidden></p>
 
     <div class="hostonly" id="hostBox">
       <div class="opts">
@@ -116,7 +121,11 @@
         </label>
         <label class="opt check">
           <input type="checkbox" id="optPriv">
-          <span>비공개 방 <small>(목록에 안 뜸)</small></span>
+          <span>비공개 방 <small>(코드로만 입장)</small></span>
+        </label>
+        <label class="opt check">
+          <input type="checkbox" id="optSpec">
+          <span>관전 허용 <small>(시작·만석이어도 구경)</small></span>
         </label>
         <label class="opt check">
           <input type="checkbox" id="optSpace">
@@ -140,6 +149,7 @@
     <div class="credit">정한결</div>
 
     <p class="hint" id="lobbyHint">방장이 시작하기를 기다리는 중…</p>
+    <div class="row center"><button class="btn" id="btnSpecLeave" hidden>나가기</button></div>
   </div>
 </section>
 
@@ -148,12 +158,15 @@
   <header class="bar">
     <span class="brand">🔔 할리갈리</span>
     <span class="pill" id="barCode">----</span>
+    <span class="pill specpill" id="specPill" hidden></span>
     <span class="spacer"></span>
     <select id="themeGame" title="테마"><option value="felt">딥 그린 펠트</option><option value="neon">네온 아케이드</option><option value="paper">크래프트 페이퍼</option><option value="midnight">미드나잇 미니멀</option><option value="candy">캔디 팝</option></select>
     <button class="btn tiny" id="btnHelp" title="도움말" aria-label="도움말">?</button>
     <button class="btn tiny" id="btnSound" title="소리 켜기/끄기" aria-label="소리">🔊</button>
     <button class="btn tiny" id="btnLeave">나가기</button>
   </header>
+
+  <div class="specbar" id="specBar" role="status" hidden>관전 중 — 다음 판부터 자리가 나면 같이 해요</div>
 
   <div class="verdict" id="verdict" hidden></div>
 

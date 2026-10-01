@@ -73,9 +73,13 @@ const el = {};
  'roomCode','btnCopy','lobbyPlayers','hostBox','optDiff','optLimit',
  'btnAddBot','btnStart','lobbyHint','barCode','btnLeave',
  'entry','btnFlip','flipTimer','status','log','overlay','ovTitle','ovSub','btnAgain',
- 'btnToLobby','toast','verdict','ovRank','theme','themeGame','board','slots','bell','btnSound','bigToggle','btnGo','waitMsg','turnNow','startGate','optMode','modePick','btnHelp','btnHelpClose','help','helpTitle','helpBody','optSpace','optPriv','inPriv','roomList','roomEmpty','roomCount','intro','setup','btnEnter','btnBack','themeIntro','confetti'].forEach(k => el[k] = $(k));
+ 'btnToLobby','toast','verdict','ovRank','theme','themeGame','board','slots','bell','btnSound','bigToggle','btnGo','waitMsg','turnNow','startGate','optMode','modePick','btnHelp','btnHelpClose','help','helpTitle','helpBody','optSpace','optPriv','inPriv','roomList','roomEmpty','roomCount','intro','setup','btnEnter','btnBack','themeIntro','confetti','inSpec','optSpec','specLine','btnSpecLeave','specPill','specBar'].forEach(k => el[k] = $(k));
 
 let ws = null, me = null, S = null, clockOffset = 0;
+/* 'player' 는 자리에 앉은 사람, 'spec' 은 관전자(판이 시작됐거나 가득 찬 방에 구경으로 들어옴).
+   관전자는 토큰이 없어 끊기면 이어 붙지 못하고, 방 목록으로 돌아간다. */
+let role = 'player';
+const isSpec = () => role === 'spec';
 let flashInfo = null, flashUntil = 0, verdictTimer = null;
 let dealing = {};        // 뒤집는 중인 자리 — 연출이 끝날 때까지 앞면을 감춘다
 const DEAL_MS = 460;
@@ -190,14 +194,22 @@ function connect(onOpen) {
       wokeUp = false;
       if (m.code !== chatRoom) { chatRoom = m.code; chatReset(); }   // 다른 방이면 채팅을 비운다
       me = m.you;
-      sessionStorage.setItem('hg', JSON.stringify({ code: m.code, token: m.token }));
+      if (m.role === 'spec') {
+        role = 'spec';
+        sessionStorage.removeItem('hg');          // 관전자는 이어 붙을 자리가 없다
+      } else {
+        const wasSpec = role === 'spec';
+        role = 'player';
+        sessionStorage.setItem('hg', JSON.stringify({ code: m.code, token: m.token }));
+        if (wasSpec && m.seated) toast('자리가 났어요 — 이제 같이 해요');
+      }
       location.hash = m.code;
     } else if (m.t === 'state') {
       onState(m);
     } else if (m.t === 'rooms') {
       if (watching) renderRooms(m.list);
     } else if (m.t === 'chat') {
-      addChat(m.name, m.text, m.from === me);
+      addChat(m.spec ? m.name + ' (관전)' : m.name, m.text, m.from === me);
     } else if (m.t === 'ev') {
       onEvent(m);
     } else if (m.t === 'drop') {
@@ -213,13 +225,17 @@ function connect(onOpen) {
     } else if (m.t === 'err') {
       // 오래 쉬다 돌아왔는데 그사이 방이 정리된 경우 — 무엇 때문인지 알려 준다
       toast(m.fatal && wokeUp ? '오래 비워 둔 사이 방이 정리됐어요. 새로 만들어 주세요.' : m.msg);
-      if (m.fatal) { sessionStorage.removeItem('hg'); show('login'); }
+      if (m.fatal) { sessionStorage.removeItem('hg'); if (isSpec()) leaveRoomView(); show('login'); }
       wokeUp = false;
     }
   };
   ws.onclose = e => {
     if (sock !== ws) return;
     clearInterval(pingT);
+    if (isSpec()) {                            // 관전자는 이어 붙을 토큰이 없다 — 방 목록으로
+      if (el.scLogin.hidden) specGone();
+      return;
+    }
     // 4000: 오래 조작이 없어 서버가 닫음 · 4001: 다른 탭이 이 자리를 이어받음(탭 복제 등)
     // 둘 다 스스로 다시 붙지 않는다 — 붙으면 서로를 밀어내며 끝없이 오간다. 누를 때 다시 붙는다.
     if (e.code === 4000 || e.code === 4001) {
@@ -249,6 +265,21 @@ function tryResume() {
   connect(() => send({ t: 'resume', code, token }));
 }
 
+/** 방을 떠난 화면 상태로 되돌린다 */
+function leaveRoomView() {
+  role = 'player'; S = null; me = null;
+  document.body.classList.remove('spectating');
+  el.specBar.hidden = true;
+  location.hash = '';
+}
+/** 관전 중에 연결이 끊겼다 (네트워크 · 오래 조작 없음 · 방이 정리됨) */
+function specGone() {
+  leaveRoomView();
+  show('login');
+  showSetup(true);
+  toast('관전 연결이 끊겼어요. 방 목록에서 다시 들어와 주세요.');
+}
+
 /* ───────────── 상태 렌더 ───────────── */
 let wasResolving = false;
 /* 판 수 세기 — 방장 화면에서만. 사람마다 보내면 한 판이 인원수만큼 세어진다. */
@@ -256,8 +287,8 @@ let gameAt = 0;
 function countGame(s, prev) {
   const my = s.you != null ? s.you : me;
   // 지금 판 중인지 — 참가자도 알린다(판 수는 방장만 세지만, "지금 누가 있나"는 사람마다 센다)
-  if (window.norara && norara.live) norara.live(s.phase === 'playing' || s.phase === 'ready');
-  if (!window.norara || !s.players || s.hostId !== my) return;
+  if (window.norara && norara.live) norara.live(role !== 'spec' && (s.phase === 'playing' || s.phase === 'ready'));
+  if (!window.norara || !s.players || role === 'spec' || s.hostId !== my) return;
   const humans = s.players.filter(p => !p.bot).length;
   if (s.phase === 'playing' && (!prev || prev.phase !== 'playing')) {
     gameAt = Date.now();
@@ -270,8 +301,11 @@ function countGame(s, prev) {
 
 function onState(s) {
   const prev = S;
+  role = s.role === 'spec' ? 'spec' : 'player';
   countGame(s, prev);
   S = s;
+  document.body.classList.toggle('spectating', isSpec());
+  renderSpecs();
   syncChatVisible();          // 대기실에서도 채팅이 되어야 한다
   // 정지 구간이 끝나는 순간 입력창을 비운다.
   // 정지 중에 친 글자가 남아 있으면 값이 바뀌지 않아 다음 판에서 아무리 쳐도 반응이 없다.
@@ -289,6 +323,18 @@ function onState(s) {
 }
 
 const myP = () => S && S.players.find(p => p.id === me);
+
+/** 관전자 수·이름 — 대기실에는 한 줄, 판 위에는 작은 알약, 관전자에게는 안내 띠 */
+function renderSpecs() {
+  const names = (S && S.specs) || [];
+  const txt = names.join(', ');
+  el.specLine.hidden = !names.length;
+  el.specLine.textContent = names.length ? `관전 중 ${names.length}명 · ${txt}` : '';
+  el.specPill.hidden = !names.length;
+  el.specPill.textContent = `관전 ${names.length}`;
+  el.specPill.title = txt;
+  el.specBar.hidden = !(isSpec() && S && S.phase !== 'lobby');
+}
 const isHost = () => S && S.hostId === me;
 /** 판 위 조작을 마치면 커서를 입력칸으로 — 과일 이름·스페이스가 곧바로 먹게 */
 function backToEntry() { if (!el.scGame.hidden && !document.body.classList.contains('chatting')) el.entry.focus(); }
@@ -308,13 +354,17 @@ function renderLobby() {
     </div>`).join('');
 
   el.hostBox.hidden = !isHost();
+  el.optSpec.checked = !!S.cfg.spec;
+  el.btnSpecLeave.hidden = !isSpec();
   el.optMode.value = S.cfg.mode || 'basic';
   el.optSpace.checked = !!S.cfg.spaceBell;
   el.optPriv.checked = !!S.cfg.priv;
   el.optDiff.value = S.cfg.botDiff;
   el.optLimit.value = String(S.cfg.turnLimit);
   el.btnStart.disabled = S.players.length < 2;
-  el.lobbyHint.textContent = isHost()
+  el.lobbyHint.textContent = isSpec()
+    ? '관전 중 — 대기 중이에요. 자리가 나면 들어온 순서대로 앉아요.'
+    : isHost()
     ? (S.players.length < 2 ? '봇을 추가하거나 친구가 들어오면 시작할 수 있어요.' : '준비되면 시작하세요.')
     : '방장이 시작하기를 기다리는 중…';
 }
@@ -701,6 +751,7 @@ function showResult() {
     </div>`).join('');
 
   el.btnAgain.hidden = !isHost();
+  el.btnToLobby.textContent = isSpec() ? '닫기' : '대기실로';
   el.overlay.hidden = false;
 }
 
@@ -717,6 +768,7 @@ function classify(v) {
 }
 
 function tryCall(raw) {
+  if (isSpec()) { el.entry.value = ''; return; }
   let v = String(raw || '').trim().toLowerCase().replace(/\s+/g, '');
   if (!v) return;
   if (v.length > 24) { v = v.slice(-24); el.entry.value = v; }
@@ -753,7 +805,7 @@ el.entry.addEventListener('keydown', e => {
 /* 스페이스바로 종 치기 — 방장이 켰을 때만 */
 const spaceOn = () => !!(S && S.cfg && S.cfg.spaceBell);
 function ringBySpace() {
-  if (!spaceOn() || !S || S.phase !== 'playing' || S.resolving) return;
+  if (isSpec() || !spaceOn() || !S || S.phase !== 'playing' || S.resolving) return;
   el.entry.value = '';
   send({ t: 'bell' });
 }
@@ -768,7 +820,7 @@ document.addEventListener('keydown', e => {
 });
 
 function doFlip() {
-  if (!S || S.phase !== 'playing' || S.turn !== me || S.resolving) return;
+  if (isSpec() || !S || S.phase !== 'playing' || S.turn !== me || S.resolving) return;
   if (S.frozen) {                       // 5개가 떠 있는 동안엔 카드를 깔 수 없다
     el.btnFlip.classList.remove('nope'); void el.btnFlip.offsetWidth;
     el.btnFlip.classList.add('nope');
@@ -834,7 +886,7 @@ el.btnBack.addEventListener('click', () => showSetup(false));
 
 el.btnCreate.addEventListener('click', () => {
   localStorage.setItem('hgName', nameOf());
-  connect(() => send({ t: 'create', name: nameOf(), mode: createMode, priv: el.inPriv.checked }));
+  connect(() => send({ t: 'create', name: nameOf(), mode: createMode, priv: el.inPriv.checked, spec: el.inSpec.checked }));
 });
 el.btnJoin.addEventListener('click', () => {
   const code = el.inCode.value.trim().toUpperCase();
@@ -866,18 +918,40 @@ document.addEventListener('visibilitychange', () => {
 
 const ROOM_STATE = { wait: '기다리는 중', full: '가득 참', playing: '게임 중' };
 const ROOM_MODE = { basic: '기본', extreme: '익스트림' };
+/** 한 줄의 상태 문구와 눌러 들어갈 수 있는지.
+    비공개 방은 코드가 목록에 실리지 않으므로 늘 비활성. 관전을 허용하는 방은 시작했거나 가득 차도 들어간다. */
+function roomRowInfo(r) {
+  if (r.priv) return { off: true, st: ROOM_STATE[r.state] || '', cls: r.state };
+  if (r.state === 'wait') return { off: false, st: ROOM_STATE.wait, cls: 'wait' };
+  if (r.state === 'playing') {
+    if (!r.spec) return { off: true, st: ROOM_STATE.playing, cls: 'playing' };
+    return { off: false, st: r.n < r.max ? '게임 중 · 다음 판부터 참여' : '게임 중 · 관전만', cls: 'spec' };
+  }
+  if (!r.spec) return { off: true, st: ROOM_STATE.full, cls: 'full' };
+  return { off: false, st: '가득 참 · 관전', cls: 'spec' };
+}
 function renderRooms(list) {
-  const open = list.filter(r => r.state === 'wait').length;
+  const open = list.filter(r => r.state === 'wait' && !r.priv).length;   // 개수는 바로 들어갈 수 있는 방만
   el.roomCount.textContent = list.length ? `${open}곳` : '';
   el.roomEmpty.hidden = list.length > 0;
   el.roomList.innerHTML = list.map(r => {
-    const off = r.state !== 'wait';
+    const { off, st, cls } = roomRowInfo(r);
+    const host = chatEsc(r.host || '이름 없음');
+    const watch = r.watching ? `<span class="rr-w">관전 ${r.watching}</span>` : '';
+    if (r.priv) {
+      return `<li><button class="roomrow off" disabled aria-label="비공개 방 — 코드로만 들어갈 수 있어요">
+        <span class="rr-code priv">비공개</span>
+        <span class="rr-host">비공개 방 · ${host} 님</span>
+        <span class="rr-n">${r.n}/${r.max}</span>${watch}
+        <span class="rr-st ${chatEsc(cls)}">${chatEsc(st)}</span>
+      </button></li>`;
+    }
     return `<li><button class="roomrow${off ? ' off' : ''}" data-code="${chatEsc(r.code)}"${off ? ' disabled' : ''}>
       <span class="rr-code">${chatEsc(r.code)}</span>
-      <span class="rr-host">${chatEsc(r.host || '이름 없음')}의 방</span>
+      <span class="rr-host">${host}의 방</span>
       <span class="rr-mode">${ROOM_MODE[r.mode] || ''}</span>
-      <span class="rr-n">${r.n}/${r.max}</span>
-      <span class="rr-st ${chatEsc(r.state)}">${ROOM_STATE[r.state] || ''}</span>
+      <span class="rr-n">${r.n}/${r.max}</span>${watch}
+      <span class="rr-st ${chatEsc(cls)}">${chatEsc(st)}</span>
     </button></li>`;
   }).join('');
 }
@@ -900,14 +974,16 @@ el.btnStart.addEventListener('click', () => send({ t: 'start' }));
 el.optMode.addEventListener('change', () => send({ t: 'cfg', mode: el.optMode.value }));
 el.optSpace.addEventListener('change', () => send({ t: 'cfg', spaceBell: el.optSpace.checked }));
 el.optPriv.addEventListener('change', () => send({ t: 'cfg', priv: el.optPriv.checked }));
+el.optSpec.addEventListener('change', () => send({ t: 'cfg', spec: el.optSpec.checked }));
 el.optDiff.addEventListener('change', () => send({ t: 'cfg', botDiff: el.optDiff.value }));
 el.optLimit.addEventListener('change', () => send({ t: 'cfg', turnLimit: +el.optLimit.value }));
 el.btnAgain.addEventListener('click', () => send({ t: 'again' }));
 el.btnToLobby.addEventListener('click', () => {
   if (isHost()) { send({ t: 'lobby' }); return; }        // 방 전체가 대기실로 — 새 사람이 코드로 들어올 수 있다
   el.overlay.hidden = true;
-  toast('방장이 대기실로 옮기면 함께 이동해요');
+  toast(isSpec() ? '방장이 다시 하거나 대기실로 옮기면 자리가 난 만큼 앉아요' : '방장이 대기실로 옮기면 함께 이동해요');
 });
+el.btnSpecLeave.addEventListener('click', () => el.btnLeave.click());
 el.btnLeave.addEventListener('click', () => {
   send({ t: 'leave' });
   sessionStorage.removeItem('hg');
@@ -1119,10 +1195,11 @@ window.addEventListener('focus', chatBack);
 /** 사람이 나 말고 또 있을 때만 채팅을 내놓는다 */
 function syncChatVisible() {
   const humans = S && S.players ? S.players.filter(p => !p.bot).length : 0;
-  const on = humans > 1;
+  const specs = S && S.specs ? S.specs.length : 0;
+  const on = humans > 1 || specs > 0 || isSpec();   // 관전자가 있으면 사람 한 명뿐인 방에서도 채팅이 된다
   $('chatBtn').hidden = !on;
   if (!on) { $('chat').hidden = true; document.body.classList.remove('chatting'); chatPeekOff(); }
-  else $('chatWho').textContent = `${humans}명`;
+  else $('chatWho').textContent = specs ? `${humans}명 · 관전 ${specs}명` : `${humans}명`;
 }
 
 $('chatBtn').onclick = () => chatOpen($('chat').hidden);
